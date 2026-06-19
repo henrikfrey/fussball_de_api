@@ -51,6 +51,11 @@ app.add_middleware(
 
 app.mount("/examples", StaticFiles(directory="./examples"), name="examples")
 
+# Serve cached club logos directly from FastAPI (single-container deploy without the
+# separate nginx from docker-compose). LOGO_BASE_URL points here, so /logos/<hash>.png resolves.
+settings.LOGOS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/logos", StaticFiles(directory=str(settings.LOGOS_DIR), check_dir=False), name="logos")
+
 
 async def prewarm_cache():
     """
