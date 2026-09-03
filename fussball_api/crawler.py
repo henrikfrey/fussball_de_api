@@ -26,6 +26,71 @@ logger = logging.getLogger(__name__)
 FUSSBALL_DE_BASE_URL = "https://www.fussball.de"
 
 
+class WrongIdTypeError(Exception):
+    """
+    Raised when an endpoint is called with an ID belonging to the other resource type,
+    i.e. a team ID on a club endpoint or the other way round.
+
+    fussball.de answers those requests with HTTP 200 and an empty body, which is
+    indistinguishable from "this team has no games". Reporting it as an empty list
+    hides the mistake, so it is turned into a 404 with an actionable message instead.
+
+    :ivar resource_id: The ID that was passed in.
+    :ivar expected: The resource type the endpoint expects ("club" or "team").
+    :ivar actual: The resource type the ID actually belongs to.
+    """
+
+    def __init__(self, resource_id: str, expected: str, actual: str):
+        self.resource_id = resource_id
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"'{resource_id}' is a {actual} ID, but this endpoint expects a "
+            f"{expected} ID. Use the /api/{actual}/{{{actual}_id}}/... endpoints instead. "
+            f"Team IDs come from a fussball.de /mannschaft/ URL, club IDs from "
+            f"/api/search/clubs."
+        )
+
+
+async def _id_exists_as(resource_id: str, kind: str) -> bool:
+    """
+    Probes fussball.de to confirm that an ID really belongs to the given resource type.
+
+    Only a non-empty response counts as confirmation, so this never turns a legitimately
+    empty result into a false positive.
+
+    :param resource_id: The ID to probe.
+    :param kind: Either "club" or "team".
+    :return: True if fussball.de returns content for that ID as that resource type.
+    """
+    if kind == "club":
+        url = f"{FUSSBALL_DE_BASE_URL}/ajax.club.teams/-/action/search/id/{resource_id}"
+    else:
+        url = f"{FUSSBALL_DE_BASE_URL}/ajax.team.next.games/-/mode/PAGE/team-id/{resource_id}"
+
+    response = await asyncio.to_thread(fetch_url, url)
+    if response is None or response.status_code != 200:
+        return False
+    return bool((response.text or "").strip())
+
+
+async def _reject_wrong_id_type(resource_id: str, expected: str) -> None:
+    """
+    Called after fussball.de returned an empty body. Confirms whether the ID belongs to
+    the other resource type and, if so, raises instead of returning an empty result.
+
+    Stays silent when the probe cannot confirm anything, so unknown IDs and genuinely
+    empty results keep their previous behaviour.
+
+    :param resource_id: The ID the endpoint was called with.
+    :param expected: The resource type the endpoint expects ("club" or "team").
+    :raises WrongIdTypeError: If the ID belongs to the other resource type.
+    """
+    other = "team" if expected == "club" else "club"
+    if await _id_exists_as(resource_id, other):
+        raise WrongIdTypeError(resource_id, expected=expected, actual=other)
+
+
 def normalize_logo_url(url: str) -> str:
     """
     Normalizes a fussball.de logo URL so that the format is enforced to 'format/6'.
@@ -187,14 +252,19 @@ async def _deobfuscate_all(parent_tag) -> str:
     return "".join(parts).strip()
 
 
-async def _get_games(url: str, cache_key: str) -> List[Game]:
+async def _get_games(
+    url: str, cache_key: str, resource_id: str, expected: str
+) -> List[Game]:
     """
     Generic function to crawl and parse a list of games.
     Uses a cache to avoid redundant requests.
 
     :param url: The URL to fetch the games from.
     :param cache_key: The key to use for caching.
+    :param resource_id: The club or team ID the request was built from.
+    :param expected: The resource type this URL expects ("club" or "team").
     :return: A list of Game objects.
+    :raises WrongIdTypeError: If resource_id belongs to the other resource type.
     """
     logger.debug(f"Attempting to get games for cache_key: {cache_key}")
 
@@ -208,6 +278,7 @@ async def _get_games(url: str, cache_key: str) -> List[Game]:
     html_content = response.text or ""
     if not html_content.strip():
         logger.info(f"No game content available for URL: {url}")
+        await _reject_wrong_id_type(resource_id, expected)
         return []
 
     logger.debug(f"Parsing new HTML content for games: {cache_key}")
@@ -396,7 +467,7 @@ async def get_club_next_games(club_id: str) -> List[Game]:
     """
     url = f"{FUSSBALL_DE_BASE_URL}/ajax.club.next.games/-/id/{club_id}/mode/PAGE"
     cache_key = f"club_next_games:{club_id}"
-    return await _get_games(url, cache_key)
+    return await _get_games(url, cache_key, club_id, "club")
 
 
 async def get_club_prev_games(club_id: str) -> List[Game]:
@@ -408,7 +479,7 @@ async def get_club_prev_games(club_id: str) -> List[Game]:
     """
     url = f"{FUSSBALL_DE_BASE_URL}/ajax.club.prev.games/-/id/{club_id}/mode/PAGE"
     cache_key = f"club_prev_games:{club_id}"
-    return await _get_games(url, cache_key)
+    return await _get_games(url, cache_key, club_id, "club")
 
 
 async def get_team_next_games(team_id: str) -> List[Game]:
@@ -420,7 +491,7 @@ async def get_team_next_games(team_id: str) -> List[Game]:
     """
     url = f"{FUSSBALL_DE_BASE_URL}/ajax.team.next.games/-/mode/PAGE/team-id/{team_id}"
     cache_key = f"team_next_games:{team_id}"
-    return await _get_games(url, cache_key)
+    return await _get_games(url, cache_key, team_id, "team")
 
 
 async def get_team_prev_games(team_id: str) -> List[Game]:
@@ -432,7 +503,7 @@ async def get_team_prev_games(team_id: str) -> List[Game]:
     """
     url = f"{FUSSBALL_DE_BASE_URL}/ajax.team.prev.games/-/mode/PAGE/team-id/{team_id}"
     cache_key = f"team_prev_games:{team_id}"
-    return await _get_games(url, cache_key)
+    return await _get_games(url, cache_key, team_id, "team")
 
 
 async def get_club_teams(club_id: str) -> List[Team]:
@@ -451,9 +522,14 @@ async def get_club_teams(club_id: str) -> List[Team]:
         logger.warning(f"Request failed for {url}. Cannot fetch teams for {club_id}.")
         return []
 
+    html_content = response.text or ""
+    if not html_content.strip():
+        logger.info(f"No team content available for club_id: {club_id}")
+        await _reject_wrong_id_type(club_id, "club")
+        return []
+
     # New data received, parse it
     logger.debug(f"Parsing new HTML content for club_id: {club_id}")
-    html_content = response.text or ""
     soup = BeautifulSoup(html_content, "lxml")
     teams = []
     team_items = soup.find_all("div", class_="item")
@@ -500,7 +576,10 @@ async def get_team_table(team_id: str) -> Optional[Table]:
 
     html_content = response.text or ""
     if not html_content.strip():
+        # Teams without a table (Ue-Mannschaften, some youth leagues) also answer with
+        # an empty body, so only a confirmed club ID may turn this into an error.
         logger.info(f"No table content available for team_id: {team_id}")
+        await _reject_wrong_id_type(team_id, "team")
         return None
 
     logger.debug(f"Parsing new HTML content for team table: {team_id}")

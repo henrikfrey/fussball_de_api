@@ -1,14 +1,17 @@
 import asyncio
 import logging
+from pathlib import Path
 from typing import List
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .cache import load_caches_from_file, save_caches_to_file
 from .config import settings
 from .crawler import (
+    WrongIdTypeError,
     get_club_next_games,
     get_club_prev_games,
     get_club_teams,
@@ -29,7 +32,7 @@ from .schemas import (
     TeamInfoResponse,
     TeamWithDetails,
 )
-from .security import get_api_key
+from .security import get_api_key, describe_configured_keys
 
 setup_logging()
 
@@ -49,7 +52,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/examples", StaticFiles(directory="./examples"), name="examples")
+# Resolved from the package location, not the working directory, so the app can be
+# started from anywhere (uvicorn, Docker, pytest).
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+app.mount(
+    "/examples",
+    StaticFiles(directory=BASE_DIR / "examples", check_dir=False),
+    name="examples",
+)
+
+
+@app.exception_handler(WrongIdTypeError)
+async def wrong_id_type_handler(request: Request, exc: WrongIdTypeError) -> JSONResponse:
+    """
+    Turns a club/team ID mix-up into a 404 with an actionable message instead of
+    letting it surface as an empty list.
+    """
+    logger.warning("Rejected request with a wrong ID type: %s", exc)
+    return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": str(exc)})
 
 # Serve cached club logos directly from FastAPI (single-container deploy without the
 # separate nginx from docker-compose). LOGO_BASE_URL points here, so /logos/<hash>.png resolves.
@@ -141,6 +162,10 @@ async def startup_event():
     Actions to perform on application startup.
     - Starts the cache pre-warming background task if configured.
     """
+    # Makes a misconfigured API_KEYS visible immediately instead of only showing up
+    # as "Invalid API Key" for the caller.
+    logger.info("API authentication: %s", describe_configured_keys())
+
     # Load caches if available
     load_caches_from_file()
     logger.info("Persistent cache loaded from file (if it existed).")

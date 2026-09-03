@@ -42,6 +42,10 @@ Um die Anwendung lokal für die Entwicklung auszuführen, befolge diese Schritte
     ```
     Wichtige Einstellungen in der `.env`-Datei:
     - **`API_KEY`**: Setze einen geheimen Wert, um deine API zu schützen.
+    - **`API_KEYS`**: Optional mehrere Keys, kommasepariert, je Eintrag
+      `<label>:<key>` oder nur `<key>`. Damit kann ein einzelner Nutzer den Zugang
+      verlieren, ohne dass die Keys aller anderen ungültig werden. Sobald `API_KEYS`
+      gesetzt ist, gilt der Platzhalter `your-secret-api-key` nicht mehr als gültig.
     - **`LOG_LEVEL`**: Passe den Log-Level an. Verwende `DEBUG` für eine detaillierte Ausgabe.
     - **`CACHE_TTL_*`**: Konfiguriere die Gültigkeitsdauer für verschiedene Cache-Typen.
     - **`PREWARM_CLUB_ID`**: Setze optional eine Vereins-ID, um proaktives Caching für einen bestimmten Verein zu aktivieren.
@@ -69,7 +73,8 @@ pytest
 
 Die API ist standardmäßig unter http://127.0.0.1:8000 erreichbar.
 
-- Authentifizierung: Über den Header X-API-Key mit dem in der .env gesetzten API_KEY.
+- Authentifizierung: Über den Header X-API-Key mit einem Key aus `API_KEY` oder `API_KEYS`.
+- Fehlt der Header komplett, antwortet die API mit `422`; bei falschem Key mit `401`.
 - Beispiel:
   ```bash
   curl -H "X-API-Key: <dein_api_key>" \

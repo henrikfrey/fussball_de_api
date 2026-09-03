@@ -8,7 +8,8 @@ class Settings(BaseSettings):
     """
     Application settings loaded from environment variables or a .env file.
 
-    :ivar API_KEY: The secret key to protect the API endpoints.
+    :ivar API_KEY: The legacy single secret key to protect the API endpoints.
+    :ivar API_KEYS: Comma-separated additional keys, each "<label>:<key>" or a bare "<key>".
     :ivar CACHE_TTL_GAMES: TTL for game-related caches in seconds.
     :ivar CACHE_TTL_TABLE: TTL for table caches in seconds.
     :ivar CACHE_TTL_TEAMS: TTL for club team list caches in seconds.
@@ -22,6 +23,9 @@ class Settings(BaseSettings):
 
     # Security
     API_KEY: str = "your-secret-api-key"
+    # Additional keys so individual consumers can be revoked on their own, e.g.
+    # API_KEYS="website:a1b2...,cousin:9f8e...". Bare keys without a label work too.
+    API_KEYS: str = ""
 
     # Logging
     LOG_LEVEL: str = "INFO"
