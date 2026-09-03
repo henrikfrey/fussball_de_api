@@ -167,3 +167,37 @@ def test_quoted_placeholder_is_still_dropped(client, monkeypatch):
 
     assert _get(client, security.PLACEHOLDER_API_KEY).status_code == 401
     assert _get(client, "key-cousin").status_code == 200
+
+
+def test_newline_separated_entries_are_accepted(client, monkeypatch):
+    """
+    A textarea in a deployment UI invites one key per line. Splitting on commas only
+    would swallow every entry but the first into one unusable key.
+    """
+    monkeypatch.setattr(settings, "API_KEYS", "website:key-website\nrico:key-rico")
+
+    assert _get(client, "key-website").status_code == 200
+    assert _get(client, "key-rico").status_code == 200
+
+
+def test_crlf_separated_entries_are_accepted(client, monkeypatch):
+    monkeypatch.setattr(settings, "API_KEYS", "website:key-website\r\nrico:key-rico")
+
+    assert _get(client, "key-website").status_code == 200
+    assert _get(client, "key-rico").status_code == 200
+
+
+def test_semicolon_separated_entries_are_accepted(client, monkeypatch):
+    monkeypatch.setattr(settings, "API_KEYS", "website:key-website;rico:key-rico")
+
+    assert _get(client, "key-website").status_code == 200
+    assert _get(client, "key-rico").status_code == 200
+
+
+def test_mixed_separators_are_accepted(client, monkeypatch):
+    monkeypatch.setattr(
+        settings, "API_KEYS", "website:key-website,\n rico:key-rico ;; henrik:key-henrik"
+    )
+
+    for key in ("key-website", "key-rico", "key-henrik"):
+        assert _get(client, key).status_code == 200, key

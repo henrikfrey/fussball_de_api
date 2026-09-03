@@ -1,4 +1,5 @@
 import logging
+import re
 import secrets
 from typing import Dict
 
@@ -44,7 +45,9 @@ def _valid_api_keys() -> Dict[str, str]:
     """
     keys: Dict[str, str] = {}
 
-    for raw_entry in _unquote(settings.API_KEYS).split(","):
+    # A deployment UI offers a textarea, so entries may be separated by newlines or
+    # semicolons rather than commas. None of these can occur inside a generated key.
+    for raw_entry in re.split(r"[,;\r\n]+", _unquote(settings.API_KEYS)):
         entry = raw_entry.strip()
         if not entry:
             continue
